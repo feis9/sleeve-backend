@@ -1,10 +1,11 @@
-// dotenv carga las variables de backend/.env (PORT y DISCOGS_TOKEN).
+// dotenv carga las variables de backend/.env (PORT, DISCOGS_TOKEN y DATABASE_URL).
 import "dotenv/config";
 
 import cors from "cors";
 import express from "express";
 
-import { ConfigError, DiscogsError, getRelease, searchByBarcode } from "./discogs";
+import { ConfigError, DiscogsError, searchByBarcode } from "./discogs";
+import { edicionConCache } from "./ediciones";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -41,12 +42,13 @@ app.get("/api/discogs/barcode/:code", async (req, res) => {
 
 // GET /api/discogs/releases/:id
 // Una edición de Discogs con la forma que usa la app (incluye la tapa en coverUrl).
+// Si se consultó hace menos de 6 horas sale de la base y no gasta un pedido de Discogs.
 app.get("/api/discogs/releases/:id", async (req, res) => {
   // Mismo criterio que parseId de la práctica: entero positivo o 400.
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "El id no es valido" });
   try {
-    res.json(await getRelease(id));
+    res.json(await edicionConCache(id));
   } catch (e) {
     if (e instanceof ConfigError) return res.status(500).json({ error: e.message });
     if (e instanceof DiscogsError && e.status === 404) return res.status(404).json({ error: "No existe en Discogs" });

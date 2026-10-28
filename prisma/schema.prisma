@@ -1,0 +1,22 @@
+// Base del backend: SQLite con Prisma, como en la Práctica Prisma.
+// Para crearla: npm run db:init (prisma generate + prisma db push).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Copia de una edición de Discogs ya consultada, para no gastar el límite de pedidos.
+// Es un caché, no la fuente de los datos: los términos de Discogs no permiten mostrar datos con
+// más de 6 horas, así que pasado ese tiempo se vuelve a pedir.
+model Edicion {
+  // Número de release de Discogs.
+  id           Int      @id
+  // La edición con la forma que usa la app (la que arma getRelease), en JSON.
+  datos        String
+  consultadaEn DateTime
+}
