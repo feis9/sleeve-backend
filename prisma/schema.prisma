@@ -20,3 +20,18 @@ model Edicion {
   datos        String
   consultadaEn DateTime
 }
+
+// Cuenta de Sleeve. La contraseña va en texto plano y se compara de forma directa: es una decisión
+// de alcance del Sprint 2, documentada como limitación (en producción iría con hash y token de sesión).
+model Usuario {
+  // Texto y no número: las cuentas de prueba conservan los ids de la app ("u-luca"), que son las
+  // claves de sus colecciones. Las cuentas nuevas reciben un id generado.
+  id          String   @id @default(cuid())
+  // Usuario y email se guardan en minúsculas, así "LucaF" y "lucaf" son la misma cuenta.
+  username    String   @unique
+  email       String   @unique
+  name        String
+  password    String
+  avatarColor String
+  createdAt   DateTime @default(now())
+}
