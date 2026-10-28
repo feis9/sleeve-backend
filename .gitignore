@@ -1,0 +1,7 @@
+node_modules/
+dist/
+# Variables locales: tienen el token de Discogs. Al repo sube .env.example.
+.env
+# Base SQLite local de cada uno.
+dev.db
+dev.db-journal
