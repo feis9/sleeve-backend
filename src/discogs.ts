@@ -67,9 +67,12 @@ export async function searchByBarcode(barcode: string) {
   });
   // La búsqueda de Discogs no es exacta: con "0000000000000" trae cualquier disco con ceros en algún código.
   // Por eso nos quedamos solo con las ediciones que tienen exactamente este código.
+  // Además, solo vinilos: el mismo código puede estar en el CD o el casete del disco. Las cajas con vinilos quedan.
   const buscado = normalizeBarcode(barcode);
-  const coinciden = data.results.filter((r) => (r.barcode ?? []).some((b) => normalizeBarcode(b) === buscado));
-  console.log(`Discogs devolvió ${data.results.length} ediciones, coinciden ${coinciden.length}`);
+  const coinciden = data.results.filter(
+    (r) => (r.barcode ?? []).some((b) => normalizeBarcode(b) === buscado) && (r.format ?? []).includes("Vinyl"),
+  );
+  console.log(`Discogs devolvió ${data.results.length} ediciones, coinciden ${coinciden.length} en vinilo`);
   return coinciden.map((r) => ({
     id: r.id,
     title: r.title,
