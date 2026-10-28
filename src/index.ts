@@ -1,11 +1,14 @@
 // dotenv carga las variables de backend/.env (PORT, DISCOGS_TOKEN y DATABASE_URL).
 import "dotenv/config";
 
+import { Prisma } from "@prisma/client";
 import cors from "cors";
 import express from "express";
 
 import { ConfigError, DiscogsError, searchByBarcode } from "./discogs";
 import { edicionConCache } from "./ediciones";
+import { prisma } from "./prisma";
+import { USUARIO_PUBLICO, validarLogin, validarRegistro } from "./usuarios";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -53,6 +56,43 @@ app.get("/api/discogs/releases/:id", async (req, res) => {
     if (e instanceof ConfigError) return res.status(500).json({ error: e.message });
     if (e instanceof DiscogsError && e.status === 404) return res.status(404).json({ error: "No existe en Discogs" });
     res.status(502).json({ error: "No se pudo consultar Discogs" });
+  }
+});
+
+// POST /api/login  { identifier, password }
+// identifier es el usuario o el email, como en la app. Contraseña en texto plano: decisión de alcance.
+app.post("/api/login", async (req, res) => {
+  const datos = validarLogin(req.body);
+  if ("error" in datos) return res.status(400).json({ error: datos.error });
+  try {
+    const where = datos.identifier.includes("@") ? { email: datos.identifier } : { username: datos.identifier };
+    const usuario = await prisma.usuario.findUnique({ where, select: { ...USUARIO_PUBLICO, password: true } });
+    // Mismo mensaje si no existe o si la contraseña no coincide: no se revela qué cuentas existen.
+    if (!usuario || usuario.password !== datos.password) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
+    }
+    const { password: _password, ...publico } = usuario;
+    res.json(publico);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error del servidor" });
+  }
+});
+
+// POST /api/registro  { username, email, name, password }
+app.post("/api/registro", async (req, res) => {
+  const datos = validarRegistro(req.body);
+  if ("error" in datos) return res.status(400).json({ error: datos.error });
+  try {
+    const usuario = await prisma.usuario.create({ data: datos, select: USUARIO_PUBLICO });
+    res.status(201).json(usuario);
+  } catch (e) {
+    // P2002: violación de @unique. El usuario o el email ya están en uso.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return res.status(409).json({ error: "Ese usuario o email ya está registrado" });
+    }
+    console.error(e);
+    res.status(500).json({ error: "Error del servidor" });
   }
 });
 
