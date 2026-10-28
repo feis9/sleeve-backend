@@ -4,7 +4,7 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 
-import { DiscogsError, getRelease, searchByBarcode } from "./discogs";
+import { ConfigError, DiscogsError, getRelease, searchByBarcode } from "./discogs";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -31,9 +31,9 @@ app.get("/api/discogs/barcode/:code", async (req, res) => {
   try {
     res.json(await searchByBarcode(code));
   } catch (e) {
-    // Falta el token: es un problema nuestro.
-    if (e instanceof DiscogsError && e.status === 500) return res.status(500).json({ error: e.message });
-    // Discogs falló o no respondió: 502 dice que el problema está en el servicio de afuera.
+    // Falta el token o Discogs lo rechaza: es un problema nuestro.
+    if (e instanceof ConfigError) return res.status(500).json({ error: e.message });
+    // Discogs falló o no respondió (aunque haya respondido 500): 502 dice que el problema está en el servicio de afuera.
     if (e instanceof DiscogsError) return res.status(502).json({ error: e.message });
     res.status(502).json({ error: "No se pudo consultar Discogs" });
   }
@@ -48,8 +48,8 @@ app.get("/api/discogs/releases/:id", async (req, res) => {
   try {
     res.json(await getRelease(id));
   } catch (e) {
+    if (e instanceof ConfigError) return res.status(500).json({ error: e.message });
     if (e instanceof DiscogsError && e.status === 404) return res.status(404).json({ error: "No existe en Discogs" });
-    if (e instanceof DiscogsError && e.status === 500) return res.status(500).json({ error: e.message });
     res.status(502).json({ error: "No se pudo consultar Discogs" });
   }
 });

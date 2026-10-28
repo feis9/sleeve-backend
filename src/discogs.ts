@@ -6,6 +6,10 @@ const BASE_URL = "https://api.discogs.com";
 // Discogs exige un User-Agent que identifique a la aplicación. Sin uno, puede bloquear los pedidos.
 const USER_AGENT = "Sleeve/1.0 +https://github.com/feis9/sleeve";
 
+// Problema de nuestra configuración (falta el token o Discogs lo rechaza): la ruta responde 500.
+// Va separado de DiscogsError para que un 500 de Discogs no se confunda con un error nuestro.
+export class ConfigError extends Error {}
+
 // Error de Discogs con su status, para que la ruta decida qué responder.
 export class DiscogsError extends Error {
   constructor(
@@ -37,7 +41,7 @@ function normalizeBarcode(code: string) {
 
 async function discogsGet<T>(path: string, params: Record<string, string> = {}): Promise<T> {
   const token = process.env.DISCOGS_TOKEN;
-  if (!token) throw new DiscogsError("Falta DISCOGS_TOKEN en backend/.env", 500);
+  if (!token) throw new ConfigError("Falta DISCOGS_TOKEN en backend/.env");
 
   const url = `${BASE_URL}${path}?${new URLSearchParams(params)}`;
   // El token va en el header y no en la URL, para que no quede en ningún log.
@@ -49,6 +53,8 @@ async function discogsGet<T>(path: string, params: Record<string, string> = {}):
   const restantes = response.headers.get("X-Discogs-Ratelimit-Remaining");
   console.log(`Discogs ${response.status} ${path} (quedan ${restantes ?? "?"} pedidos en el minuto)`);
 
+  // 401: Discogs no acepta el token. Se arregla en nuestro .env, no es una falla de Discogs.
+  if (response.status === 401) throw new ConfigError("Discogs rechazó el DISCOGS_TOKEN de backend/.env");
   if (!response.ok) throw new DiscogsError(`Discogs respondió ${response.status}`, response.status);
   return (await response.json()) as T;
 }
