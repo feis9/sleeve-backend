@@ -4,7 +4,7 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 
-import { DiscogsError, searchByBarcode } from "./discogs";
+import { DiscogsError, getRelease, searchByBarcode } from "./discogs";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -35,6 +35,21 @@ app.get("/api/discogs/barcode/:code", async (req, res) => {
     if (e instanceof DiscogsError && e.status === 500) return res.status(500).json({ error: e.message });
     // Discogs falló o no respondió: 502 dice que el problema está en el servicio de afuera.
     if (e instanceof DiscogsError) return res.status(502).json({ error: e.message });
+    res.status(502).json({ error: "No se pudo consultar Discogs" });
+  }
+});
+
+// GET /api/discogs/releases/:id
+// Una edición de Discogs con la forma que usa la app (incluye la tapa en coverUrl).
+app.get("/api/discogs/releases/:id", async (req, res) => {
+  // Mismo criterio que parseId de la práctica: entero positivo o 400.
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "El id no es valido" });
+  try {
+    res.json(await getRelease(id));
+  } catch (e) {
+    if (e instanceof DiscogsError && e.status === 404) return res.status(404).json({ error: "No existe en Discogs" });
+    if (e instanceof DiscogsError && e.status === 500) return res.status(500).json({ error: e.message });
     res.status(502).json({ error: "No se pudo consultar Discogs" });
   }
 });
