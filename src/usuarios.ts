@@ -12,7 +12,15 @@ const REVIEW_MAX = 500;
 // Colores de avatar de las cuentas de prueba. A una cuenta nueva le toca uno según su usuario.
 const AVATAR_COLORS = ["#E8A33D", "#C0587E", "#4F8A8B", "#7B6CF6", "#3E7CB1"];
 
-// Lo que se devuelve de un usuario: todo menos la contraseña. Se usa como select de Prisma,
+// Lo que ve cualquiera de otro usuario (perfil, ranking, autor de una reseña): sin email ni contraseña.
+export const PERFIL_PUBLICO = {
+  id: true,
+  username: true,
+  name: true,
+  avatarColor: true,
+} as const;
+
+// Lo que recibe el propio usuario al entrar o registrarse: todo menos la contraseña. Se usa como select de Prisma,
 // así la contraseña ni siquiera sale de la base.
 export const USUARIO_PUBLICO = {
   id: true,
@@ -68,4 +76,27 @@ export function validarResena(body: unknown): { error: string } | DatosResena {
     return { error: `La reseña tiene que tener entre ${REVIEW_MIN} y ${REVIEW_MAX} caracteres` };
   }
   return { rating, body: cuerpo };
+}
+
+// Número de release de Discogs válido (entero positivo), como texto, o null.
+export function releaseIdValido(valor: string) {
+  const id = Number(valor);
+  return Number.isInteger(id) && id > 0 ? String(id) : null;
+}
+
+export type DatosHallazgo = { latitude: number; longitude: number; place: string | null; foundAt: Date };
+
+const PLACE_MAX = 100;
+
+// Hallazgo: coordenadas válidas, lugar opcional y fecha. Mismo formato que el tipo Find de la app.
+export function validarHallazgo(body: unknown): { error: string } | DatosHallazgo {
+  const datos = (body ?? {}) as Record<string, unknown>;
+  const { latitude, longitude } = datos;
+  if (typeof latitude !== "number" || latitude < -90 || latitude > 90) return { error: "La latitud va de -90 a 90" };
+  if (typeof longitude !== "number" || longitude < -180 || longitude > 180) return { error: "La longitud va de -180 a 180" };
+  const place = datos.place === null || datos.place === undefined ? null : texto(datos.place);
+  if (place !== null && place.length > PLACE_MAX) return { error: `El lugar tiene hasta ${PLACE_MAX} caracteres` };
+  const foundAt = new Date(typeof datos.date === "string" ? datos.date : "");
+  if (Number.isNaN(foundAt.getTime())) return { error: "La fecha del hallazgo no es válida" };
+  return { latitude, longitude, place: place || null, foundAt };
 }

@@ -35,6 +35,25 @@ model Usuario {
   avatarColor String
   createdAt   DateTime @default(now())
   resenas     Resena[]
+  coleccion   ColeccionItem[]
+}
+
+// Un disco en la colección de un usuario. Si el GPS respondió al agregarlo, también dónde lo encontró.
+model ColeccionItem {
+  usuarioId  String
+  usuario    Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  // Número de release de Discogs como texto, igual que el id de los discos en la app.
+  releaseId  String
+  agregadoEn DateTime  @default(now())
+  // Hallazgo (tipo Find de la app). Van juntos o vacíos: el disco se agrega aunque el GPS falle.
+  latitude   Float?
+  longitude  Float?
+  // "San Telmo, Buenos Aires". Puede quedar vacío aunque haya coordenadas.
+  place      String?
+  foundAt    DateTime?
+
+  // Un mismo disco una sola vez por usuario.
+  @@id([usuarioId, releaseId])
 }
 
 // Reseña de una edición. Una por usuario y edición: escribir otra reemplaza la anterior, como en la app.
