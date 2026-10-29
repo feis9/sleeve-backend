@@ -8,7 +8,7 @@ import express from "express";
 import { ConfigError, DiscogsError, searchByBarcode } from "./discogs";
 import { edicionConCache } from "./ediciones";
 import { prisma } from "./prisma";
-import { USUARIO_PUBLICO, validarLogin, validarRegistro } from "./usuarios";
+import { USUARIO_PUBLICO, validarLogin, validarRegistro, validarResena } from "./usuarios";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -90,6 +90,66 @@ app.post("/api/registro", async (req, res) => {
     // P2002: violación de @unique. El usuario o el email ya están en uso.
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return res.status(409).json({ error: "Ese usuario o email ya está registrado" });
+    }
+    console.error(e);
+    res.status(500).json({ error: "Error del servidor" });
+  }
+});
+
+// Una reseña con su autor (sin contraseña), para que la app la muestre aunque el autor no esté en su mock.
+const RESENA_CON_AUTOR = {
+  id: true,
+  usuarioId: true,
+  releaseId: true,
+  rating: true,
+  body: true,
+  createdAt: true,
+  updatedAt: true,
+  usuario: { select: USUARIO_PUBLICO },
+} as const;
+
+// GET /api/resenas?releaseId=…&usuarioId=…
+// Todas las reseñas, de la más reciente a la más vieja. Los dos filtros son opcionales.
+app.get("/api/resenas", async (req, res) => {
+  const { releaseId, usuarioId } = req.query;
+  try {
+    const resenas = await prisma.resena.findMany({
+      where: {
+        ...(typeof releaseId === "string" && { releaseId }),
+        ...(typeof usuarioId === "string" && { usuarioId }),
+      },
+      orderBy: { updatedAt: "desc" },
+      select: RESENA_CON_AUTOR,
+    });
+    res.json(resenas);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error del servidor" });
+  }
+});
+
+// PUT /api/usuarios/:usuarioId/resenas/:releaseId  { rating, body }
+// Crea la reseña de ese usuario para esa edición o reemplaza la que había (PUT: el resultado es el mismo
+// aunque se mande dos veces). Sin tokens, el usuario viene en la URL: es la misma decisión de alcance del login.
+app.put("/api/usuarios/:usuarioId/resenas/:releaseId", async (req, res) => {
+  const { usuarioId, releaseId } = req.params;
+  // Mismo criterio que /api/discogs/releases/:id: un número de release válido.
+  const id = Number(releaseId);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "El id del disco no es valido" });
+  const datos = validarResena(req.body);
+  if ("error" in datos) return res.status(400).json({ error: datos.error });
+  try {
+    const resena = await prisma.resena.upsert({
+      where: { usuarioId_releaseId: { usuarioId, releaseId: String(id) } },
+      create: { usuarioId, releaseId: String(id), ...datos },
+      update: datos,
+      select: RESENA_CON_AUTOR,
+    });
+    res.json(resena);
+  } catch (e) {
+    // P2003: la clave foránea no apunta a ningún usuario.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+      return res.status(404).json({ error: "El usuario no existe" });
     }
     console.error(e);
     res.status(500).json({ error: "Error del servidor" });

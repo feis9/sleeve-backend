@@ -5,6 +5,9 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const USERNAME_RE = /^[a-z0-9._]{3,30}$/i;
 const PASSWORD_MIN = 6;
 const NAME_MAX = 50;
+// Reseñas: mismas reglas que REVIEW_MIN y REVIEW_MAX de la app.
+const REVIEW_MIN = 10;
+const REVIEW_MAX = 500;
 
 // Colores de avatar de las cuentas de prueba. A una cuenta nueva le toca uno según su usuario.
 const AVATAR_COLORS = ["#E8A33D", "#C0587E", "#4F8A8B", "#7B6CF6", "#3E7CB1"];
@@ -49,4 +52,20 @@ export function validarRegistro(body: unknown): { error: string } | DatosRegistr
   if (password.length < PASSWORD_MIN) return { error: `La contraseña tiene que tener al menos ${PASSWORD_MIN} caracteres` };
   const suma = [...username].reduce((total, letra) => total + letra.charCodeAt(0), 0);
   return { username, email, name, password, avatarColor: AVATAR_COLORS[suma % AVATAR_COLORS.length] };
+}
+
+export type DatosResena = { rating: number; body: string };
+
+// Reseña: de 1 a 5 estrellas y un texto de 10 a 500 caracteres (sin contar espacios de los bordes).
+export function validarResena(body: unknown): { error: string } | DatosResena {
+  const datos = (body ?? {}) as Record<string, unknown>;
+  const rating = datos.rating;
+  const cuerpo = texto(datos.body);
+  if (typeof rating !== "number" || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return { error: "La reseña lleva de 1 a 5 estrellas" };
+  }
+  if (cuerpo.length < REVIEW_MIN || cuerpo.length > REVIEW_MAX) {
+    return { error: `La reseña tiene que tener entre ${REVIEW_MIN} y ${REVIEW_MAX} caracteres` };
+  }
+  return { rating, body: cuerpo };
 }

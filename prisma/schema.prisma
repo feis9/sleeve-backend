@@ -34,4 +34,21 @@ model Usuario {
   password    String
   avatarColor String
   createdAt   DateTime @default(now())
+  resenas     Resena[]
+}
+
+// Reseña de una edición. Una por usuario y edición: escribir otra reemplaza la anterior, como en la app.
+model Resena {
+  id        String   @id @default(cuid())
+  usuarioId String
+  // Si se borra el usuario, se borran sus reseñas.
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  // Número de release de Discogs como texto, igual que el id de los discos en la app.
+  releaseId String
+  rating    Int
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([usuarioId, releaseId])
 }
