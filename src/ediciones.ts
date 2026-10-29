@@ -3,7 +3,9 @@
 import { getRelease } from "./discogs";
 import { prisma } from "./prisma";
 
-type Edicion = Awaited<ReturnType<typeof getRelease>>;
+// La edición más cuándo se consultó a Discogs (ISO 8601). La app lo usa para no mostrar copias de más de 6 horas:
+// si una edición sale del caché, su antigüedad empieza a contar desde la consulta, no desde que la recibe la app.
+type Edicion = Awaited<ReturnType<typeof getRelease>> & { consultadaEn: string };
 
 // Los términos de uso de la API de Discogs no permiten mostrar datos con más de 6 horas de antigüedad.
 const VIGENCIA_MS = 6 * 60 * 60 * 1000;
@@ -17,7 +19,7 @@ export async function edicionConCache(id: number): Promise<Edicion> {
       const antiguedad = Date.now() - guardada.consultadaEn.getTime();
       if (antiguedad < VIGENCIA_MS) {
         console.log(`Edición ${id} desde la base (consultada hace ${Math.round(antiguedad / 60000)} min)`);
-        return JSON.parse(guardada.datos) as Edicion;
+        return { ...(JSON.parse(guardada.datos) as Edicion), consultadaEn: guardada.consultadaEn.toISOString() };
       }
     }
   } catch (e) {
@@ -33,5 +35,5 @@ export async function edicionConCache(id: number): Promise<Edicion> {
   } catch (e) {
     console.error(`No se pudo guardar la edición ${id} en la base:`, e);
   }
-  return edicion;
+  return { ...edicion, consultadaEn: consultadaEn.toISOString() };
 }
