@@ -5,9 +5,11 @@ import { Prisma } from "@prisma/client";
 import cors from "cors";
 import express from "express";
 
+import { HASH_DE_RELLENO, hashear, verificar } from "./contrasenas";
 import { ConfigError, DiscogsError, searchByBarcode } from "./discogs";
 import { edicionConCache } from "./ediciones";
 import { prisma } from "./prisma";
+import { nuevaSesion, requiereSesion } from "./sesiones";
 import {
   PERFIL_PUBLICO,
   USUARIO_PUBLICO,
@@ -67,38 +69,82 @@ app.get("/api/discogs/releases/:id", async (req, res) => {
   }
 });
 
-// POST /api/login  { identifier, password }
-// identifier es el usuario o el email, como en la app. Contraseña en texto plano: decisión de alcance.
+// POST /api/login  { identifier, password }  →  { usuario, token }
+// identifier es el usuario o el email, como en la app. La contraseña se compara contra su hash (src/contrasenas.ts).
+// Si coincide, se crea una sesión y la app recibe el token que va a mandar en cada pedido.
 app.post("/api/login", async (req, res) => {
   const datos = validarLogin(req.body);
   if ("error" in datos) return res.status(400).json({ error: datos.error });
   try {
     const where = datos.identifier.includes("@") ? { email: datos.identifier } : { username: datos.identifier };
-    const usuario = await prisma.usuario.findUnique({ where, select: { ...USUARIO_PUBLICO, password: true } });
+    const usuario = await prisma.usuario.findUnique({ where, select: { ...USUARIO_PUBLICO, passwordHash: true } });
+    // Si el usuario no existe se verifica igual, contra un hash de relleno: así la respuesta tarda lo mismo
+    // y midiendo el tiempo no se sabe qué cuentas existen.
+    const coincide = await verificar(datos.password, usuario?.passwordHash ?? (await HASH_DE_RELLENO));
     // Mismo mensaje si no existe o si la contraseña no coincide: no se revela qué cuentas existen.
-    if (!usuario || usuario.password !== datos.password) {
+    if (!usuario || !coincide) {
       return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
     }
-    const { password: _password, ...publico } = usuario;
-    res.json(publico);
+    const { passwordHash: _hash, ...publico } = usuario;
+    const { token, fila } = nuevaSesion();
+    await prisma.sesion.create({ data: { ...fila, usuarioId: publico.id } });
+    res.json({ usuario: publico, token });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Error del servidor" });
   }
 });
 
-// POST /api/registro  { username, email, name, password }
+// POST /api/registro  { username, email, name, password }  →  { usuario, token }
+// Al registrarse se queda logueado, así que también se crea la sesión.
 app.post("/api/registro", async (req, res) => {
   const datos = validarRegistro(req.body);
   if ("error" in datos) return res.status(400).json({ error: datos.error });
   try {
-    const usuario = await prisma.usuario.create({ data: datos, select: USUARIO_PUBLICO });
-    res.status(201).json(usuario);
+    // Se guarda el hash, nunca la contraseña que llegó en el body.
+    const { password, ...resto } = datos;
+    const { token, fila } = nuevaSesion();
+    // La sesión se crea anidada en el usuario: Prisma hace las dos inserciones en una transacción,
+    // así no puede quedar un usuario sin sesión ni una sesión sin usuario.
+    const usuario = await prisma.usuario.create({
+      data: { ...resto, passwordHash: await hashear(password), sesiones: { create: fila } },
+      select: USUARIO_PUBLICO,
+    });
+    res.status(201).json({ usuario, token });
   } catch (e) {
     // P2002: violación de @unique. El usuario o el email ya están en uso.
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return res.status(409).json({ error: "Ese usuario o email ya está registrado" });
     }
+    console.error(e);
+    res.status(500).json({ error: "Error del servidor" });
+  }
+});
+
+// GET /api/yo  (con token)
+// El usuario dueño del token. La app lo usa para saber si la sesión que tiene guardada sigue sirviendo.
+app.get("/api/yo", requiereSesion, async (_req, res) => {
+  try {
+    const usuario = await prisma.usuario.findUnique({ where: { id: res.locals.usuarioId }, select: USUARIO_PUBLICO });
+    // No debería pasar: si se borra el usuario, sus sesiones se borran en cascada.
+    if (!usuario) return res.status(404).json({ error: "El usuario no existe" });
+    res.json(usuario);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error del servidor" });
+  }
+});
+
+// DELETE /api/sesion  (con token)
+// Cerrar sesión: borra la sesión de este token. Las de otros teléfonos del mismo usuario siguen andando.
+// Después de esto el token ya no sirve, aunque alguien lo haya copiado: es lo que un JWT no permite sin más.
+app.delete("/api/sesion", requiereSesion, async (_req, res) => {
+  try {
+    await prisma.sesion.delete({ where: { tokenHash: res.locals.tokenHash } });
+    res.status(204).end();
+  } catch (e) {
+    // P2025: otro pedido con el mismo token la borró entre el middleware y acá. El resultado es el mismo.
+    if (errorPrisma(e, "P2025")) return res.status(204).end();
     console.error(e);
     res.status(500).json({ error: "Error del servidor" });
   }
@@ -137,11 +183,12 @@ app.get("/api/resenas", async (req, res) => {
   }
 });
 
-// PUT /api/usuarios/:usuarioId/resenas/:releaseId  { rating, body }
-// Crea la reseña de ese usuario para esa edición o reemplaza la que había (PUT: el resultado es el mismo
-// aunque se mande dos veces). Sin tokens, el usuario viene en la URL: es la misma decisión de alcance del login.
-app.put("/api/usuarios/:usuarioId/resenas/:releaseId", async (req, res) => {
-  const { usuarioId } = req.params;
+// PUT /api/yo/resenas/:releaseId  { rating, body }  (con token)
+// Crea la reseña del usuario logueado para esa edición o reemplaza la que había (PUT: el resultado es el mismo
+// aunque se mande dos veces). El usuario sale del token (requiereSesion), no de la URL: así nadie puede
+// escribir una reseña a nombre de otro cambiando un id.
+app.put("/api/yo/resenas/:releaseId", requiereSesion, async (req, res) => {
+  const { usuarioId } = res.locals;
   // Mismo criterio que /api/discogs/releases/:id: un número de release válido.
   const releaseId = releaseIdValido(req.params.releaseId);
   if (!releaseId) return res.status(400).json({ error: "El id del disco no es valido" });
@@ -156,10 +203,8 @@ app.put("/api/usuarios/:usuarioId/resenas/:releaseId", async (req, res) => {
     });
     res.json(resena);
   } catch (e) {
-    // P2003: la clave foránea no apunta a ningún usuario.
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
-      return res.status(404).json({ error: "El usuario no existe" });
-    }
+    // Ya no hace falta traducir P2003 (usuario inexistente): si el token es válido, el usuario existe,
+    // porque al borrar un usuario se borran sus sesiones en cascada.
     console.error(e);
     res.status(500).json({ error: "Error del servidor" });
   }
@@ -218,12 +263,12 @@ app.get("/api/usuarios/:id/coleccion", async (req, res) => {
   }
 });
 
-// PUT /api/usuarios/:id/coleccion/:releaseId
-// Agrega el disco a la colección. Si ya estaba, lo deja como está (PUT: mismo resultado si se repite).
-app.put("/api/usuarios/:id/coleccion/:releaseId", async (req, res) => {
+// PUT /api/yo/coleccion/:releaseId  (con token)
+// Agrega el disco a la colección del usuario logueado. Si ya estaba, lo deja como está (PUT: mismo resultado si se repite).
+app.put("/api/yo/coleccion/:releaseId", requiereSesion, async (req, res) => {
   const releaseId = releaseIdValido(req.params.releaseId);
   if (!releaseId) return res.status(400).json({ error: "El id del disco no es valido" });
-  const usuarioId = req.params.id;
+  const { usuarioId } = res.locals;
   try {
     const item = await prisma.coleccionItem.upsert({
       where: { usuarioId_releaseId: { usuarioId, releaseId } },
@@ -232,40 +277,39 @@ app.put("/api/usuarios/:id/coleccion/:releaseId", async (req, res) => {
     });
     res.json(itemParaApp(item));
   } catch (e) {
-    if (errorPrisma(e, "P2003")) return res.status(404).json({ error: "El usuario no existe" });
     console.error(e);
     res.status(500).json({ error: "Error del servidor" });
   }
 });
 
-// PUT /api/usuarios/:id/coleccion/:releaseId/hallazgo  { latitude, longitude, place, date }
+// PUT /api/yo/coleccion/:releaseId/hallazgo  { latitude, longitude, place, date }  (con token)
 // Dónde y cuándo encontró el disco. Llega después de agregarlo, cuando responde el GPS.
-app.put("/api/usuarios/:id/coleccion/:releaseId/hallazgo", async (req, res) => {
+app.put("/api/yo/coleccion/:releaseId/hallazgo", requiereSesion, async (req, res) => {
   const releaseId = releaseIdValido(req.params.releaseId);
   if (!releaseId) return res.status(400).json({ error: "El id del disco no es valido" });
   const datos = validarHallazgo(req.body);
   if ("error" in datos) return res.status(400).json({ error: datos.error });
   try {
     const item = await prisma.coleccionItem.update({
-      where: { usuarioId_releaseId: { usuarioId: req.params.id, releaseId } },
+      where: { usuarioId_releaseId: { usuarioId: res.locals.usuarioId, releaseId } },
       data: datos,
     });
     res.json(itemParaApp(item));
   } catch (e) {
-    // P2025: no hay registro que actualizar. El disco no está en la colección (o el usuario no existe).
+    // P2025: no hay registro que actualizar. El disco no está en la colección.
     if (errorPrisma(e, "P2025")) return res.status(404).json({ error: "Ese disco no está en la colección" });
     console.error(e);
     res.status(500).json({ error: "Error del servidor" });
   }
 });
 
-// DELETE /api/usuarios/:id/coleccion/:releaseId
-// Saca el disco de la colección, y con él dónde se encontró.
-app.delete("/api/usuarios/:id/coleccion/:releaseId", async (req, res) => {
+// DELETE /api/yo/coleccion/:releaseId  (con token)
+// Saca el disco de la colección del usuario logueado, y con él dónde se encontró.
+app.delete("/api/yo/coleccion/:releaseId", requiereSesion, async (req, res) => {
   const releaseId = releaseIdValido(req.params.releaseId);
   if (!releaseId) return res.status(400).json({ error: "El id del disco no es valido" });
   try {
-    await prisma.coleccionItem.delete({ where: { usuarioId_releaseId: { usuarioId: req.params.id, releaseId } } });
+    await prisma.coleccionItem.delete({ where: { usuarioId_releaseId: { usuarioId: res.locals.usuarioId, releaseId } } });
     res.status(204).end();
   } catch (e) {
     if (errorPrisma(e, "P2025")) return res.status(404).json({ error: "Ese disco no está en la colección" });

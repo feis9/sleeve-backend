@@ -20,8 +20,8 @@ export const PERFIL_PUBLICO = {
   avatarColor: true,
 } as const;
 
-// Lo que recibe el propio usuario al entrar o registrarse: todo menos la contraseña. Se usa como select de Prisma,
-// así la contraseña ni siquiera sale de la base.
+// Lo que recibe el propio usuario al entrar o registrarse: todo menos el hash de la contraseña. Se usa como select
+// de Prisma, así el hash ni siquiera sale de la base.
 export const USUARIO_PUBLICO = {
   id: true,
   username: true,

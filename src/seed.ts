@@ -2,6 +2,7 @@
 // ya existe, no la toca (ni su colección, para no devolver discos que el usuario sacó).
 import "dotenv/config";
 
+import { hashear } from "./contrasenas";
 import { prisma } from "./prisma";
 
 // Las cuentas y colecciones de prueba del Sprint 1. Los discos son números de release de Discogs (los de
@@ -36,7 +37,8 @@ async function main() {
     await prisma.usuario.create({
       data: {
         ...cuenta,
-        password: "vinilo123",
+        // Todas las cuentas de prueba entran con "vinilo123", pero en la base queda solo su hash.
+        passwordHash: await hashear("vinilo123"),
         // Un minuto entre cada disco, para que el orden sea el de la lista.
         coleccion: { create: coleccion.map((releaseId, i) => ({ releaseId, agregadoEn: new Date(ahora - i * 60000) })) },
       },

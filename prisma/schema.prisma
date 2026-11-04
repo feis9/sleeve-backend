@@ -21,8 +21,7 @@ model Edicion {
   consultadaEn DateTime
 }
 
-// Cuenta de Sleeve. La contraseña va en texto plano y se compara de forma directa: es una decisión
-// de alcance del Sprint 2, documentada como limitación (en producción iría con hash y token de sesión).
+// Cuenta de Sleeve. La contraseña nunca se guarda: se guarda su hash con scrypt (src/contrasenas.ts).
 model Usuario {
   // Texto y no número: las cuentas de prueba conservan los ids de la app ("u-luca"), que son las
   // claves de sus colecciones. Las cuentas nuevas reciben un id generado.
@@ -31,11 +30,25 @@ model Usuario {
   username    String   @unique
   email       String   @unique
   name        String
-  password    String
+  // "sal:hash" en hexadecimal. Se llama passwordHash y no password para que nadie lo confunda con la contraseña.
+  passwordHash String
   avatarColor String
   createdAt   DateTime @default(now())
   resenas     Resena[]
   coleccion   ColeccionItem[]
+  sesiones    Sesion[]
+}
+
+// Una sesión iniciada: se crea en cada login o registro. Un usuario puede tener varias (un teléfono cada una).
+model Sesion {
+  // SHA-256 del token que tiene la app (src/sesiones.ts). El token mismo nunca se guarda.
+  tokenHash String   @id
+  usuarioId String
+  // Si se borra el usuario, se borran sus sesiones.
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  creadaEn  DateTime @default(now())
+  // Pasada esta fecha, el token deja de servir y hay que volver a entrar.
+  expiraEn  DateTime
 }
 
 // Un disco en la colección de un usuario. Si el GPS respondió al agregarlo, también dónde lo encontró.
