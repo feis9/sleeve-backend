@@ -34,10 +34,14 @@ type SearchResult = {
 };
 
 // Solo dígitos, y un EAN-13 con 0 adelante es el mismo UPC-A (igual que normalizeBarcode en la app).
-function normalizeBarcode(code: string) {
+export function normalizeBarcode(code: string) {
   const digits = code.replace(/\D/g, "");
   return digits.length === 13 && digits.startsWith("0") ? digits.slice(1) : digits;
 }
+
+// Cuántos pedidos le hizo el backend a Discogs desde que arrancó. Sirve para medir cuántos ahorra el caché:
+// se compara con la cantidad de pedidos que hizo la app (el contador de index.ts).
+let pedidosADiscogs = 0;
 
 async function discogsGet<T>(path: string, params: Record<string, string> = {}): Promise<T> {
   const token = process.env.DISCOGS_TOKEN;
@@ -51,7 +55,8 @@ async function discogsGet<T>(path: string, params: Record<string, string> = {}):
 
   // Discogs permite 60 pedidos por minuto con token. Lo mostramos para ver cuánto queda.
   const restantes = response.headers.get("X-Discogs-Ratelimit-Remaining");
-  console.log(`Discogs ${response.status} ${path} (quedan ${restantes ?? "?"} pedidos en el minuto)`);
+  pedidosADiscogs++;
+  console.log(`Discogs #${pedidosADiscogs} ${response.status} ${path} (quedan ${restantes ?? "?"} pedidos en el minuto)`);
 
   // 401: Discogs no acepta el token. Se arregla en nuestro .env, no es una falla de Discogs.
   if (response.status === 401) throw new ConfigError("Discogs rechazó el DISCOGS_TOKEN de backend/.env");

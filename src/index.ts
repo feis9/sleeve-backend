@@ -5,10 +5,12 @@ import { Prisma } from "@prisma/client";
 import cors from "cors";
 import express from "express";
 
+import { edicionesPorCodigo } from "./busquedas";
 import { HASH_DE_RELLENO, hashear, verificar } from "./contrasenas";
 import { ConfigError, DiscogsError, searchByBarcode } from "./discogs";
-import { edicionConCache } from "./ediciones";
+import { edicionConCache, edicionesPorIds } from "./ediciones";
 import { prisma } from "./prisma";
+import { programarPurga } from "./purga";
 import { nuevaSesion, requiereSesion } from "./sesiones";
 import {
   PERFIL_PUBLICO,
@@ -27,6 +29,15 @@ const port = Number(process.env.PORT ?? 3000);
 // y express.json() convierte el body JSON en req.body.
 app.use(cors());
 app.use(express.json());
+
+// Cuenta y anota cada pedido de la app a las rutas de discos (/api/discogs y /api/ediciones). Junto con el contador "Discogs #N" de discogs.ts
+// muestra cuántos pedidos de la app terminan en un pedido a Discogs y cuántos los resuelve la base.
+let pedidosDeLaApp = 0;
+app.use(["/api/discogs", "/api/ediciones"], (req, _res, next) => {
+  pedidosDeLaApp++;
+  console.log(`App #${pedidosDeLaApp} ${req.method} ${req.originalUrl}`);
+  next();
+});
 
 // Prueba mínima: si responde, Express está vivo. Es lo primero que se prueba cuando algo no anda.
 app.get("/api/health", (_req, res) => {
@@ -65,6 +76,45 @@ app.get("/api/discogs/releases/:id", async (req, res) => {
   } catch (e) {
     if (e instanceof ConfigError) return res.status(500).json({ error: e.message });
     if (e instanceof DiscogsError && e.status === 404) return res.status(404).json({ error: "No existe en Discogs" });
+    res.status(502).json({ error: "No se pudo consultar Discogs" });
+  }
+});
+
+// Máximo de ediciones por pedido con ?ids=. Discogs permite 60 pedidos por minuto: con la réplica vacía,
+// un solo pedido de la app no debería poder gastarlos todos.
+const MAX_IDS = 50;
+
+// GET /api/ediciones?codigo=…   o   GET /api/ediciones?ids=1517028,15527003,…
+// Ediciones completas (tapa, país, tracklist) en una sola respuesta, en lugar de un pedido por edición.
+// Con codigo: las ediciones en vinilo con ese código de barras (el escaneo). Sin resultados devuelve [].
+// Con ids: esas ediciones, en ese orden (el catálogo de la app). Las que no existen en Discogs se omiten.
+// La búsqueda y cada edición salen de la réplica si se consultaron hace menos de 6 horas.
+app.get("/api/ediciones", async (req, res) => {
+  const { codigo: codigoCrudo, ids: idsCrudos } = req.query;
+  if ((codigoCrudo === undefined) === (idsCrudos === undefined)) {
+    return res.status(400).json({ error: "Hay que pasar codigo o ids, uno de los dos" });
+  }
+  let pedir: () => Promise<unknown>;
+  if (codigoCrudo !== undefined) {
+    // Mismo criterio que /api/discogs/barcode/:code: se aceptan espacios y guiones, y entre 8 y 13 dígitos.
+    const codigo = typeof codigoCrudo === "string" ? codigoCrudo.replace(/[\s-]/g, "") : "";
+    if (!/^\d{8,13}$/.test(codigo)) {
+      return res.status(400).json({ error: "El código tiene que tener entre 8 y 13 dígitos" });
+    }
+    pedir = () => edicionesPorCodigo(codigo);
+  } else {
+    // "1517028,15527003": cada uno tiene que ser un número de release válido (entero positivo).
+    const ids = typeof idsCrudos === "string" ? idsCrudos.split(",").map(Number) : [];
+    if (ids.length === 0 || !ids.every((id) => Number.isInteger(id) && id > 0)) {
+      return res.status(400).json({ error: "ids tiene que ser una lista de números separados por comas" });
+    }
+    if (ids.length > MAX_IDS) return res.status(400).json({ error: `Se pueden pedir hasta ${MAX_IDS} ediciones por vez` });
+    pedir = () => edicionesPorIds(ids);
+  }
+  try {
+    res.json(await pedir());
+  } catch (e) {
+    if (e instanceof ConfigError) return res.status(500).json({ error: e.message });
     res.status(502).json({ error: "No se pudo consultar Discogs" });
   }
 });
@@ -339,4 +389,5 @@ app.get("/api/ranking", async (_req, res) => {
 // Sin host, Node escucha en todas las interfaces de la PC: el teléfono entra por la IP local.
 app.listen(port, () => {
   console.log(`API escuchando en el puerto ${port}`);
+  programarPurga();
 });
